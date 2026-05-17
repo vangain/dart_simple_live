@@ -3,6 +3,10 @@ name: Build Android 16 APK
 on:
   workflow_dispatch: 
 
+# 【重要新增】赋予 GitHub Actions 往您的仓库里写入/保存文件的权限
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,19 +26,34 @@ jobs:
         with:
           channel: 'stable'
 
-      # 新增步骤：自动生成临时的签名证书和 key.properties，解决 null 报错
-      - name: Generate Dummy Keystore & key.properties
+      # 【核心改动】自动生成并永久保存签名文件到您的仓库
+      - name: Setup Persistent Keystore
         working-directory: ./simple_live_app/android
         run: |
-          # 自动生成一个有效期 10000 天的临时 keystore
-          keytool -genkey -v -keystore dummy.keystore -storepass 123456 -alias mykey -keypass 123456 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          # 创建打包必须的 key.properties 配置文件
+          # 检查仓库里是否已经有我们生成的签名文件
+          if [ ! -f "my_release.keystore" ]; then
+            echo "未找到签名文件，正在生成并保存到仓库..."
+            # 生成有效期 10000 天的专属签名
+            keytool -genkey -v -keystore my_release.keystore -storepass 123456 -alias mykey -keypass 123456 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=SimpleLive,O=Android,C=US"
+            
+            # 配置 Git 机器人信息
+            git config --global user.name "github-actions[bot]"
+            git config --global user.email "github-actions[bot]@users.noreply.github.com"
+            
+            # 强制添加签名文件（绕过 .gitignore 限制）并推送到您的 GitHub 仓库
+            git add -f my_release.keystore
+            git commit -m "Auto-generate persistent keystore for seamless updates"
+            git push
+          else
+            echo "检测到已存在的签名文件，直接使用以保证更新时的签名一致性！"
+          fi
+          
+          # 动态生成打包所需的配置文件
           echo "storePassword=123456" > key.properties
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
-          echo "storeFile=$(pwd)/dummy.keystore" >> key.properties
+          echo "storeFile=$(pwd)/my_release.keystore" >> key.properties
 
-      # 针对新版的 Kotlin DSL (.kts) 语法修改 SDK 版本
       - name: Set SDK Version to 36
         working-directory: ./simple_live_app
         run: |
