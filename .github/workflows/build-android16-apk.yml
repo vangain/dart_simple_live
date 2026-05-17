@@ -3,7 +3,7 @@ name: Build Android 16 APK
 on:
   workflow_dispatch: 
 
-# 【重要新增】赋予 GitHub Actions 往您的仓库里写入/保存文件的权限
+# 赋予 GitHub Actions 往仓库写入文件的权限（用于保存签名）
 permissions:
   contents: write
 
@@ -26,21 +26,15 @@ jobs:
         with:
           channel: 'stable'
 
-      # 【核心改动】自动生成并永久保存签名文件到您的仓库
+      # 自动生成并永久保存签名文件到您的仓库
       - name: Setup Persistent Keystore
         working-directory: ./simple_live_app/android
         run: |
-          # 检查仓库里是否已经有我们生成的签名文件
           if [ ! -f "my_release.keystore" ]; then
             echo "未找到签名文件，正在生成并保存到仓库..."
-            # 生成有效期 10000 天的专属签名
             keytool -genkey -v -keystore my_release.keystore -storepass 123456 -alias mykey -keypass 123456 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=SimpleLive,O=Android,C=US"
-            
-            # 配置 Git 机器人信息
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            
-            # 强制添加签名文件（绕过 .gitignore 限制）并推送到您的 GitHub 仓库
             git add -f my_release.keystore
             git commit -m "Auto-generate persistent keystore for seamless updates"
             git push
@@ -48,12 +42,26 @@ jobs:
             echo "检测到已存在的签名文件，直接使用以保证更新时的签名一致性！"
           fi
           
-          # 动态生成打包所需的配置文件
           echo "storePassword=123456" > key.properties
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
           echo "storeFile=$(pwd)/my_release.keystore" >> key.properties
 
+      # 【重要新增】强制升级 Kotlin 编译版本为 2.1.0，解决版本不匹配报错
+      - name: Update Kotlin Version
+        working-directory: ./simple_live_app
+        run: |
+          # 针对新版 Flutter 结构 (settings.gradle)
+          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle || true
+          sed -i -E "s/id 'org.jetbrains.kotlin.android' version '[^']+'/id 'org.jetbrains.kotlin.android' version '2.1.0'/g" android/settings.gradle || true
+          
+          # 针对旧版/KTS 结构 (build.gradle 或 build.gradle.kts)
+          sed -i -E "s/ext.kotlin_version = '[^']+'/ext.kotlin_version = '2.1.0'/g" android/build.gradle || true
+          sed -i -E 's/ext.kotlin_version = "[^"]+"/ext.kotlin_version = "2.1.0"/g' android/build.gradle || true
+          sed -i -E "s/ext.kotlin_version = '[^']+'/ext.kotlin_version = '2.1.0'/g" android/build.gradle.kts || true
+          sed -i -E 's/ext.kotlin_version = "[^"]+"/ext.kotlin_version = "2.1.0"/g' android/build.gradle.kts || true
+
+      # 修改 Android SDK 目标版本为 36 (Android 16)
       - name: Set SDK Version to 36
         working-directory: ./simple_live_app
         run: |
