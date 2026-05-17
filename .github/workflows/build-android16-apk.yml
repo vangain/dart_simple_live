@@ -1,0 +1,51 @@
+name: Build Android 16 APK
+
+# 允许在网页端手动点击按钮来触发编译
+on:
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出您的源码
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 2. 配置 Java 17 环境 (兼容最新安卓与Flutter编译)
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      # 3. 安装最新的 Flutter 稳定版
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      # 4. 修改编译目标版本为 Android 16 (API 36)
+      - name: Set SDK Version to 36
+        working-directory: ./simple_live_app
+        run: |
+          sed -i 's/compileSdkVersion .*/compileSdkVersion 36/g' android/app/build.gradle || true
+          sed -i 's/targetSdkVersion .*/targetSdkVersion 36/g' android/app/build.gradle || true
+
+      # 5. 下载所有必需的第三方插件和核心库依赖
+      - name: Install Dependencies
+        working-directory: ./simple_live_app
+        run: flutter pub get
+
+      # 6. 开始编译 64 位 Release 版本的 APK
+      - name: Build APK (Release & Arm64)
+        working-directory: ./simple_live_app
+        run: flutter build apk --release --target-platform android-arm64
+
+      # 7. 提取编译完成的 APK 文件提供给您下载
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleLive-Android16-Arm64
+          path: simple_live_app/build/app/outputs/flutter-apk/app-release.apk
