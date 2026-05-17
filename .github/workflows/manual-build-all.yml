@@ -1,0 +1,142 @@
+name: Publish App Dev
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'simple_live_core/**'
+      - 'simple_live_app/**'
+      - '.github/workflows/publish_app_dev.yml'
+
+jobs:
+  build-mac-ios-android:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false  # 修复添加的行
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.3'
+          channel: 'stable'
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Android
+        run: |
+          cd simple_live_app
+          flutter build apk --release --target-platform android-arm64,android-arm
+          mv build/app/outputs/flutter-apk/app-release.apk ../Simple-Live-Android-Dev.apk
+
+      - name: Build iOS
+        run: |
+          cd simple_live_app
+          flutter build ios --release --no-codesign
+          cd build/ios/iphoneos
+          mkdir Payload
+          mv Runner.app Payload
+          zip -r ../../../Simple-Live-iOS-Dev.ipa Payload
+
+      - name: Build macOS
+        run: |
+          cd simple_live_app
+          flutter build macos --release
+          cd build/macos/Build/Products/Release
+          zip -r ../../../../../Simple-Live-macOS-Dev.zip "Simple Live.app"
+
+      - name: Upload Android
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simple-Live-Android-Dev
+          path: Simple-Live-Android-Dev.apk
+
+      - name: Upload iOS
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simple-Live-iOS-Dev
+          path: Simple-Live-iOS-Dev.ipa
+
+      - name: Upload macOS
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simple-Live-macOS-Dev
+          path: Simple-Live-macOS-Dev.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false  # 修复添加的行
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.3'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Windows
+        run: |
+          cd simple_live_app
+          flutter build windows --release
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath ../Simple-Live-Windows-Dev.zip
+
+      - name: Upload Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simple-Live-Windows-Dev
+          path: Simple-Live-Windows-Dev.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false  # 修复添加的行
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.3'
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build Linux
+        run: |
+          cd simple_live_app
+          flutter build linux --release
+          cd build/linux/x64/release/bundle
+          zip -r ../../../../../Simple-Live-Linux-Dev.zip .
+
+      - name: Upload Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simple-Live-Linux-Dev
+          path: Simple-Live-Linux-Dev.zip
