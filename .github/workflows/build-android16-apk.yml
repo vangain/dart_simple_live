@@ -1,4 +1,4 @@
-name: Build Android 16 APK (Final Version 2026)
+name: Build Android 16 APK (2026 Fixed Syntax)
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
         with:
           flutter-version: "3.38.x"
 
-      # 签名逻辑：生成后永久存放在你的仓库，解决安装包签名一致性
+      # 签名固化逻辑
       - name: Setup Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -33,7 +33,7 @@ jobs:
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add -f my_release.keystore
-            git commit -m "chore: persist keystore"
+            git commit -m "chore: fixed keystore for android 16"
             git push
           fi
           echo "storeFile=$(pwd)/my_release.keystore" > key.properties
@@ -41,13 +41,13 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 使用 Python 脚本彻底修补项目配置，避开 Shell 引号问题
+      # 使用 Python 精准区分 .gradle 和 .kts 的引号规则
       - name: Patch Android Project
         shell: python
         run: |
           import os, re
           
-          # 1. 修改 settings.gradle，强制 Kotlin 插件版本为 2.3.0
+          # 1. 修改 settings.gradle (通常是 Groovy，但也可能含 Kotlin 插件定义)
           s_path = 'simple_live_app/android/settings.gradle'
           if os.path.exists(s_path):
               with open(s_path, 'r') as f: content = f.read()
@@ -55,31 +55,42 @@ jobs:
                               'id "org.jetbrains.kotlin.android" version "2.3.0"', content)
               with open(s_path, 'w') as f: f.write(content)
 
-          # 2. 修改 app/build.gradle，强制 SDK 36 并注入 Kotlin 强制对齐策略
+          # 2. 遍历修改 build.gradle 和 build.gradle.kts
           for bp in ['simple_live_app/android/app/build.gradle.kts', 'simple_live_app/android/app/build.gradle']:
               if os.path.exists(bp):
-                  with open(bp, 'r') as f: content = f.read()
-                  # 替换 SDK 版本
-                  content = re.sub(r'compileSdk\s*=?\s*\d+', 'compileSdk = 36', content)
-                  content = re.sub(r'targetSdk\s*=?\s*\d+', 'targetSdk = 36', content)
-                  content = re.sub(r'compileSdkVersion\s*\d+', 'compileSdkVersion 36', content)
-                  content = re.sub(r'targetSdkVersion\s*\d+', 'targetSdkVersion 36', content)
+                  is_kts = bp.endswith('.kts')
+                  # 重要：KTS 必须用双引号 (")，Groovy 可以用单引号 (')
+                  q = '"' if is_kts else "'"
                   
-                  # 在文件末尾注入全局 Kotlin 版本锁定策略
+                  with open(bp, 'r') as f: content = f.read()
+                  
+                  # 替换 SDK 版本
+                  content = re.sub(r'compileSdk\s*=?\s*\d+', f'compileSdk = 36', content)
+                  content = re.sub(r'targetSdk\s*=?\s*\d+', f'targetSdk = 36', content)
+                  content = re.sub(r'compileSdkVersion\s*\d+', f'compileSdkVersion 36', content)
+                  content = re.sub(r'targetSdkVersion\s*\d+', f'targetSdkVersion 36', content)
+                  
+                  # 注入 Kotlin 版本强制对齐策略
                   if 'resolutionStrategy' not in content:
-                      content += "\nconfigurations.all { resolutionStrategy.eachDependency { details -> if (details.requested.group == 'org.jetbrains.kotlin') { details.useVersion '2.3.0' } } }\n"
+                      if is_kts:
+                          # Kotlin DSL 语法
+                          strategy = f'\nconfigurations.all {{ resolutionStrategy {{ eachDependency {{ if (requested.group == {q}org.jetbrains.kotlin{q}) {{ useVersion({q}2.3.0{q}) }} }} }} }}\n'
+                      else:
+                          # Groovy 语法
+                          strategy = f'\nconfigurations.all {{ resolutionStrategy.eachDependency {{ details -> if (details.requested.group == {q}org.jetbrains.kotlin{q}) {{ details.useVersion {q}2.3.0{q} }} }} }}\n'
+                      content += strategy
                   
                   with open(bp, 'w') as f: f.write(content)
+                  print(f"Patched {bp} with correct quotes for {'Kotlin' if is_kts else 'Groovy'}")
 
       - name: Build APK
         working-directory: ./simple_live_app
         run: |
           flutter pub get
-          # 删除了所有可能报错的自定义 Flag，只留最纯净的编译命令
           flutter build apk --release --target-platform android-arm64
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SimpleLive-Android16-Final
+          name: SimpleLive-Android16-2026
           path: simple_live_app/build/app/outputs/flutter-apk/*.apk
