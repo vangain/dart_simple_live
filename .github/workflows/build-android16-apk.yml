@@ -1,4 +1,4 @@
-name: Build Android 16 (Final Fix 2026)
+name: Build Android 16 APK (Final Version 2026)
 
 on:
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
         with:
           flutter-version: "3.38.x"
 
-      # 签名逻辑：生成一次后会自动存在你仓库里，以后更新签名就一致了
+      # 签名逻辑：生成后永久存放在你的仓库，解决安装包签名一致性
       - name: Setup Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -41,48 +41,45 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 【核心改动】创建一个全局 init.gradle 脚本，从外部强行锁定版本
-      - name: Create Global Init Script
+      # 使用 Python 脚本彻底修补项目配置，避开 Shell 引号问题
+      - name: Patch Android Project
+        shell: python
         run: |
-          cat <<EOF > fix_build.gradle
-          allprojects {
-              buildscript {
-                  configurations.all {
-                      resolutionStrategy.force "org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0"
-                  }
-              }
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          compileSdkVersion 36
-                          defaultConfig {
-                              targetSdkVersion 36
-                          }
-                      }
-                  }
-                  project.configurations.all {
-                      resolutionStrategy.eachDependency { details ->
-                          if (details.requested.group == 'org.jetbrains.kotlin') {
-                              details.useVersion '2.3.0'
-                          }
-                      }
-                  }
-              }
-          }
-          EOF
+          import os, re
+          
+          # 1. 修改 settings.gradle，强制 Kotlin 插件版本为 2.3.0
+          s_path = 'simple_live_app/android/settings.gradle'
+          if os.path.exists(s_path):
+              with open(s_path, 'r') as f: content = f.read()
+              content = re.sub(r'id\s*\(?["\']org\.jetbrains\.kotlin\.android["\']\)?\s*version\s*["\'][^"\']+["\']', 
+                              'id "org.jetbrains.kotlin.android" version "2.3.0"', content)
+              with open(s_path, 'w') as f: f.write(content)
+
+          # 2. 修改 app/build.gradle，强制 SDK 36 并注入 Kotlin 强制对齐策略
+          for bp in ['simple_live_app/android/app/build.gradle.kts', 'simple_live_app/android/app/build.gradle']:
+              if os.path.exists(bp):
+                  with open(bp, 'r') as f: content = f.read()
+                  # 替换 SDK 版本
+                  content = re.sub(r'compileSdk\s*=?\s*\d+', 'compileSdk = 36', content)
+                  content = re.sub(r'targetSdk\s*=?\s*\d+', 'targetSdk = 36', content)
+                  content = re.sub(r'compileSdkVersion\s*\d+', 'compileSdkVersion 36', content)
+                  content = re.sub(r'targetSdkVersion\s*\d+', 'targetSdkVersion 36', content)
+                  
+                  # 在文件末尾注入全局 Kotlin 版本锁定策略
+                  if 'resolutionStrategy' not in content:
+                      content += "\nconfigurations.all { resolutionStrategy.eachDependency { details -> if (details.requested.group == 'org.jetbrains.kotlin') { details.useVersion '2.3.0' } } }\n"
+                  
+                  with open(bp, 'w') as f: f.write(content)
 
       - name: Build APK
         working-directory: ./simple_live_app
         run: |
           flutter pub get
-          # 使用 --init-script 挂载我们写的“外挂”脚本
-          flutter build apk --release --target-platform android-arm64 --performance-measurement \
-            --extra-front-end-options="--no-implicit-dynamic" \
-            -- --init-script ../fix_build.gradle
+          # 删除了所有可能报错的自定义 Flag，只留最纯净的编译命令
+          flutter build apk --release --target-platform android-arm64
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SimpleLive-Android16-Final
-          # 使用通配符，防止文件名因为 Flutter 版本不同而发生变化
           path: simple_live_app/build/app/outputs/flutter-apk/*.apk
