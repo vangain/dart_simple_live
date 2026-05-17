@@ -1,6 +1,6 @@
 name: Build Android 16 APK (2026 Fixed Syntax)
 
-on:
+于:
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
           if os.path.exists(s_path):
               with open(s_path, 'r') as f: content = f.read()
               content = re.sub(r'id\s*\(?["\']org\.jetbrains\.kotlin\.android["\']\)?\s*version\s*["\'][^"\']+["\']', 
-                              'id "org.jetbrains.kotlin.android" version "2.3.0"', content)
+                              'id "org.jetbrains.kotlin.android" version "2.1.0"', content)
               with open(s_path, 'w') as f: f.write(content)
 
           # 2. 遍历修改 build.gradle 和 build.gradle.kts
@@ -74,10 +74,10 @@ jobs:
                   if 'resolutionStrategy' not in content:
                       if is_kts:
                           # Kotlin DSL 语法
-                          strategy = f'\nconfigurations.all {{ resolutionStrategy {{ eachDependency {{ if (requested.group == {q}org.jetbrains.kotlin{q}) {{ useVersion({q}2.3.0{q}) }} }} }} }}\n'
+                          strategy = f'\nconfigurations.all {{ resolutionStrategy {{ eachDependency {{ if (requested.group == {q}org.jetbrains.kotlin{q}) {{ useVersion({q}2.1.0{q}) }} }} }} }}\n'
                       else:
                           # Groovy 语法
-                          strategy = f'\nconfigurations.all {{ resolutionStrategy.eachDependency {{ details -> if (details.requested.group == {q}org.jetbrains.kotlin{q}) {{ details.useVersion {q}2.3.0{q} }} }} }}\n'
+                          strategy = f'\nconfigurations.all {{ resolutionStrategy.eachDependency {{ details -> if (details.requested.group == {q}org.jetbrains.kotlin{q}) {{ details.useVersion {q}2.1.0{q} }} }} }}\n'
                       content += strategy
                   
                   with open(bp, 'w') as f: f.write(content)
