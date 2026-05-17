@@ -1,142 +1,88 @@
-name: Publish App Dev
+build-mac-ios-android1:
+  runs-on: macos-14
+  name: 编译 macOS/iOS/Android 端
+  env:
+    # 强制所有 actions 使用 Node.js 24（官方推荐的临时解决方案）
+    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    FLUTTER_VERSION: '3.38.3'
+    PUB_HOSTED_URL: 'https://pub.flutter-io.cn'
+    FLUTTER_STORAGE_BASE_URL: 'https://storage.flutter-io.cn'
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - dev
-    paths:
-      - 'simple_live_core/**'
-      - 'simple_live_app/**'
-      - '.github/workflows/publish_app_dev.yml'
+  steps:
+    # 1. 升级到支持 Node.js 24 的 checkout v5
+    - name: 检出完整代码历史（用于自动获取版本号）
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        persist-credentials: false  # 保留原项目的权限修复
 
-jobs:
-  build-mac-ios-android:
-    runs-on: macos-14
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false  # 修复添加的行
+    # 2. 升级到支持 Node.js 24 的 flutter-action v2.16.0+
+    - name: 设置 Flutter 环境
+      uses: subosito/flutter-action@v2.16.0
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+        channel: 'stable'
+        cache: true
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.38.3'
-          channel: 'stable'
-          cache: true
+    # 3. 修复 macOS 14 上 Xcode 命令行工具配置问题
+    - name: 配置 Xcode 环境
+      run: |
+        sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+        xcodebuild -version
 
-      - name: Flutter version
-        run: flutter --version
+    - name: 验证 Flutter 环境
+      run: |
+        flutter --version
+        flutter config --no-analytics
 
-      - name: Install dependencies
-        run: flutter pub get
+    - name: 清理并获取项目依赖
+      run: |
+        flutter clean
+        flutter pub get
 
-      - name: Build Android
-        run: |
-          cd simple_live_app
-          flutter build apk --release --target-platform android-arm64,android-arm
-          mv build/app/outputs/flutter-apk/app-release.apk ../Simple-Live-Android-Dev.apk
+    # 4. 编译 Android APK
+    - name: 编译 Android Release
+      working-directory: simple_live_app
+      run: |
+        flutter build apk --release --target-platform android-arm64,android-arm
+        mv build/app/outputs/flutter-apk/app-release.apk ../Simple-Live-Android-${{ github.ref_name }}.apk
 
-      - name: Build iOS
-        run: |
-          cd simple_live_app
-          flutter build ios --release --no-codesign
-          cd build/ios/iphoneos
-          mkdir Payload
-          mv Runner.app Payload
-          zip -r ../../../Simple-Live-iOS-Dev.ipa Payload
+    # 5. 编译 iOS IPA（无签名版）
+    - name: 编译 iOS Release
+      working-directory: simple_live_app
+      run: |
+        flutter build ios --release --no-codesign
+        cd build/ios/iphoneos
+        mkdir Payload
+        mv Runner.app Payload
+        zip -r ../../../Simple-Live-iOS-${{ github.ref_name }}.ipa Payload
 
-      - name: Build macOS
-        run: |
-          cd simple_live_app
-          flutter build macos --release
-          cd build/macos/Build/Products/Release
-          zip -r ../../../../../Simple-Live-macOS-Dev.zip "Simple Live.app"
+    # 6. 编译 macOS 桌面端
+    - name: 编译 macOS Release
+      working-directory: simple_live_app
+      run: |
+        flutter build macos --release
+        cd build/macos/Build/Products/Release
+        zip -r ../../../../../Simple-Live-macOS-${{ github.ref_name }}.zip "Simple Live.app"
 
-      - name: Upload Android
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-Android-Dev
-          path: Simple-Live-Android-Dev.apk
+    # 7. 上传所有产物
+    - name: 上传 Android 产物
+      uses: actions/upload-artifact@v4.4.0  # 同样升级到支持 Node.js 24 的版本
+      with:
+        name: Simple-Live-Android-${{ github.ref_name }}
+        path: Simple-Live-Android-${{ github.ref_name }}.apk
+        retention-days: 30
 
-      - name: Upload iOS
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-iOS-Dev
-          path: Simple-Live-iOS-Dev.ipa
+    - name: 上传 iOS 产物
+      uses: actions/upload-artifact@v4.4.0
+      with:
+        name: Simple-Live-iOS-${{ github.ref_name }}
+        path: Simple-Live-iOS-${{ github.ref_name }}.ipa
+        retention-days: 30
 
-      - name: Upload macOS
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-macOS-Dev
-          path: Simple-Live-macOS-Dev.zip
-
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false  # 修复添加的行
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.38.3'
-          channel: 'stable'
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Windows
-        run: |
-          cd simple_live_app
-          flutter build windows --release
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath ../Simple-Live-Windows-Dev.zip
-
-      - name: Upload Windows
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-Windows-Dev
-          path: Simple-Live-Windows-Dev.zip
-
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false  # 修复添加的行
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.38.3'
-          channel: 'stable'
-          cache: true
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Build Linux
-        run: |
-          cd simple_live_app
-          flutter build linux --release
-          cd build/linux/x64/release/bundle
-          zip -r ../../../../../Simple-Live-Linux-Dev.zip .
-
-      - name: Upload Linux
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-Linux-Dev
-          path: Simple-Live-Linux-Dev.zip
+    - name: 上传 macOS 产物
+      uses: actions/upload-artifact@v4.4.0
+      with:
+        name: Simple-Live-macOS-${{ github.ref_name }}
+        path: Simple-Live-macOS-${{ github.ref_name }}.zip
+        retention-days: 30
