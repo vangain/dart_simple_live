@@ -1,24 +1,19 @@
-name: Build Android 16 APK (Robust Version)
+name: Build Android 16 APK (Final Robust)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "dev_v*"
 
-# 【稳健配置区】以后再遇到版本报错，只需修改这里的数字即可全局生效！
 env:
-  KOTLIN_VERSION: "2.3.0"   # 看报错日志里的 "metadata is X.X.X"，填到这里
-  TARGET_SDK: "36"          # 适配 Android 16
-  FLUTTER_VERSION: "3.38.x" # 锁定 Flutter 大版本，防止系统级 API 突变
+  # 经过验证，对于 Flutter 3.38，2.1.0 是目前最稳健的选择
+  K_VERSION: "2.1.0"
+  SDK_VERSION: "36"
 
 permissions:
   contents: write
 
 jobs:
   build-android:
-    runs-on: ubuntu-latest  # 使用 Linux 编译安卓，速度最快、不费额度
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -33,15 +28,14 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+          flutter-version: "3.38.x"
           cache: true
 
-      # 1. 自动生成并固化签名（解决您没有作者 Secret 的问题）
+      # 1. 自动签名逻辑（保持不变，确保您能正常安装和更新）
       - name: Setup Persistent Keystore
         working-directory: ./simple_live_app/android
         run: |
           if [ ! -f "my_release.keystore" ]; then
-            echo "未找到签名，正在生成并保存..."
             keytool -genkey -v -keystore my_release.keystore -storepass 123456 -alias mykey -keypass 123456 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=SimpleLive,O=Android,C=US"
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -54,34 +48,56 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 2. 【核心稳健操作】统一注入顶部配置的 Kotlin 版本与 SDK 版本
-      - name: Apply Kotlin & SDK Versions
+      # 2. 【核心稳健步骤】使用 Python 进行物理级版本替换，避开 sed 漏洞
+      - name: Force Update Versions (Python Script)
+        working-directory: ./simple_live_app/android
+        run: |
+          python3 -c "
+          import re, os
+          # 修复 settings.gradle 中的插件版本
+          if os.path.exists('settings.gradle'):
+              c = open('settings.gradle').read()
+              c = re.sub(r'(id\s*[\"|\']org.jetbrains.kotlin.android[\"']\s*version\s*[\"|\'])([^\"|\']+)([\"|\'])', r'\g<1>${{ env.K_VERSION }}\g<3>', c)
+              open('settings.gradle', 'w').write(c)
+          
+          # 修复 app 目录下的 SDK 版本
+          bp = 'app/build.gradle.kts'
+          if not os.path.exists(bp): bp = 'app/build.gradle'
+          if os.path.exists(bp):
+              c = open(bp).read()
+              c = re.sub(r'compileSdk\s*=\s*\d+', 'compileSdk = ${{ env.SDK_VERSION }}', c)
+              c = re.sub(r'targetSdk\s*=\s*\d+', 'targetSdk = ${{ env.SDK_VERSION }}', c)
+              c = re.sub(r'compileSdkVersion\s*\d+', 'compileSdkVersion ${{ env.SDK_VERSION }}', c)
+              c = re.sub(r'targetSdkVersion\s*\d+', 'targetSdkVersion ${{ env.SDK_VERSION }}', c)
+              open(bp, 'w').write(c)
+          "
+
+      # 3. 【终极绝招】在全局 build.gradle 中注入策略，强制所有依赖库版本对齐
+      # 这能解决 metadata 2.3.0 vs 2.1.0 的冲突
+      - name: Inject Global Resolution Strategy
+        working-directory: ./simple_live_app/android
+        run: |
+          echo "
+          allprojects {
+              configurations.all {
+                  resolutionStrategy.eachDependency { details ->
+                      if (details.requested.group == 'org.jetbrains.kotlin') {
+                          details.useVersion '${{ env.K_VERSION }}'
+                      }
+                  }
+              }
+          }
+          " >> build.gradle
+
+      # 4. 清理并打包
+      - name: Build APK
         working-directory: ./simple_live_app
         run: |
-          echo "注入 Kotlin 版本: ${{ env.KOTLIN_VERSION }}"
-          echo "注入 SDK 版本: ${{ env.TARGET_SDK }}"
-          
-          # 替换 Kotlin 版本
-          sed -i -E "s/id [\"']org.jetbrains.kotlin.android[\"'] version [\"'][^\"]+[\"']/id 'org.jetbrains.kotlin.android' version '${{ env.KOTLIN_VERSION }}'/g" android/settings.gradle || true
-          sed -i -E "s/ext.kotlin_version = [\"'][^\"]+[\"']/ext.kotlin_version = '${{ env.KOTLIN_VERSION }}'/g" android/build.gradle || true
-          sed -i -E "s/ext.kotlin_version = [\"'][^\"]+[\"']/ext.kotlin_version = '${{ env.KOTLIN_VERSION }}'/g" android/build.gradle.kts || true
-          
-          # 替换 Android SDK 版本
-          sed -i "s/compileSdk = .*/compileSdk = ${{ env.TARGET_SDK }}/g" android/app/build.gradle.kts || true
-          sed -i "s/targetSdk = .*/targetSdk = ${{ env.TARGET_SDK }}/g" android/app/build.gradle.kts || true
-          sed -i "s/compileSdkVersion .*/compileSdkVersion ${{ env.TARGET_SDK }}/g" android/app/build.gradle || true
-          sed -i "s/targetSdkVersion .*/targetSdkVersion ${{ env.TARGET_SDK }}/g" android/app/build.gradle || true
+          flutter clean
+          flutter pub get
+          flutter build apk --release --target-platform android-arm64
 
-      - name: Restore Packages
-        working-directory: ./simple_live_app
-        run: flutter pub get
-
-      # 3. 为您的新手机单独打包 64 位纯净版本
-      - name: Build APK (Android 16 Arm64)
-        working-directory: ./simple_live_app
-        run: flutter build apk --release --target-platform android-arm64
-
-      - name: Upload Android APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SimpleLive-Android16-Arm64
