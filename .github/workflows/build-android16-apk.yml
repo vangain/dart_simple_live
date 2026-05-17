@@ -23,10 +23,10 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.38.10' # 严格匹配你日志中的版本
+          flutter-version: '3.38.10'
           cache: true
 
-      # 签名设置：必须有签名，Android 16 才会允许安装
+      # 签名设置（自动管理密钥，确保你可以覆盖安装）
       - name: Setup Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -35,7 +35,7 @@ jobs:
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add -f my_release.keystore
-            git commit -m "Add permanent keystore"
+            git commit -m "chore: add keystore for signing"
             git push
           fi
           echo "storeFile=$(pwd)/my_release.keystore" > key.properties
@@ -43,17 +43,19 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 严格修复：直接修改版本号，不注入额外代码
+      # 严格修复：使用 find 自动匹配文件后缀，解决路径找不到和版本不匹配的问题
       - name: Patch Versions
+        working-directory: ./simple_live_app/android
         run: |
-          # 1. 修复 Kotlin 版本（解决 metadata 2.3.0 报错）
-          # 根据 Flutter Fix 提示，修改 settings.gradle 中的插件版本
-          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.3.0"/g' simple_live_app/android/settings.gradle
+          # 1. 自动查找 settings.gradle 或 .kts，并修复 Kotlin 为 2.3.0
+          find . -maxdepth 1 -name "settings.gradle*" -exec sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.3.0"/g' {} +
           
-          # 2. 修改 Android SDK 版本为 36 (Android 16)
-          # 修改 app/build.gradle.kts 中的 compileSdk 和 targetSdk
-          sed -i 's/compileSdk = .*/compileSdk = 36/g' simple_live_app/android/app/build.gradle.kts
-          sed -i 's/targetSdk = .*/targetSdk = 36/g' simple_live_app/android/app/build.gradle.kts
+          # 2. 自动查找 build.gradle 或 .kts，并修复 SDK 版本为 36
+          find app -name "build.gradle*" -exec sed -i 's/compileSdk[ =]*[0-9]*/compileSdk = 36/g' {} +
+          find app -name "build.gradle*" -exec sed -i 's/targetSdk[ =]*[0-9]*/targetSdk = 36/g' {} +
+          # 兼容旧版 Groovy 语法
+          find app -name "build.gradle*" -exec sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 36/g' {} +
+          find app -name "build.gradle*" -exec sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 36/g' {} +
 
       - name: Build APK
         working-directory: ./simple_live_app
