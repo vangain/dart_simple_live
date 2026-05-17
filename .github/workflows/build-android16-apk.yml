@@ -26,12 +26,7 @@ jobs:
           flutter-version: '3.38.10'
           cache: true
 
-      # 显式安装 Android 16 SDK (API 36)，防止云端环境缺失
-      - name: Install Android 16 SDK
-        run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
-
-      # 签名设置（保持不变，确保安装包可以被系统接受）
+      # 签名证书：Android 16 必须有签名才能安装，此处采用自动生成并存储的方案
       - name: Setup Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -40,7 +35,7 @@ jobs:
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add -f my_release.keystore
-            git commit -m "chore: add keystore"
+            git commit -m "chore: add keystore for release signing"
             git push
           fi
           echo "storeFile=$(pwd)/my_release.keystore" > key.properties
@@ -48,18 +43,37 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 精准修改版本号（不再使用模糊匹配，防止拼写错误）
+      # 【工程级修复】使用 Python 脚本精准定位并改写版本配置
+      # 理由：Python 处理多行文本和引号比 sed 稳健 100 倍，不会产生乱码或合并错误
       - name: Patch Android Configuration
-        working-directory: ./simple_live_app/android
+        shell: python
         run: |
-          # 1. 修复 Kotlin 版本为 2.3.0（解决 metadata 2.3.0 报错）
-          # 使用 @ 作为定界符，防止路径或特殊符号干扰，直接匹配含有 kotlin.android 的行并重写
-          sed -i '/id("org.jetbrains.kotlin.android") version/c\    id("org.jetbrains.kotlin.android") version "2.3.0"' settings.gradle
+          import os, re
           
-          # 2. 修复 SDK 版本为 36 (针对 build.gradle.kts)
-          # c\ 命令会直接替换整行内容，绝对不会出现 36flutter 这种合并错误
-          sed -i '/compileSdk = .*/c\    compileSdk = 36' app/build.gradle.kts
-          sed -i '/targetSdk = .*/c\        targetSdk = 36' app/build.gradle.kts
+          # 1. 修正 settings.gradle 中的 Kotlin 插件版本（解决 metadata 2.3.0 报错）
+          s_path = 'simple_live_app/android/settings.gradle'
+          if os.path.exists(s_path):
+              with open(s_path, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              # 无论原版本是多少，精准定位 id(...) version "..." 结构并替换整段
+              new_content = re.sub(r'(id\s*\(?["\']org\.jetbrains\.kotlin\.android["\']\)?\s+version\s+)"[^"]+"', 
+                                   r'\1"2.3.0"', content)
+              with open(s_path, 'w', encoding='utf-8') as f:
+                  f.write(new_content)
+              print(f"Successfully patched {s_path}")
+
+          # 2. 修正 app/build.gradle.kts 中的 SDK 版本（适配 Android 16）
+          b_path = 'simple_live_app/android/app/build.gradle.kts'
+          if os.path.exists(b_path):
+              with open(b_path, 'r', encoding='utf-8') as f:
+                  content = f.read()
+              # 替换 compileSdk = ... 为硬编码的 36
+              content = re.sub(r'compileSdk\s*=\s*.*', 'compileSdk = 36', content)
+              # 替换 targetSdk = ... 为硬编码的 36
+              content = re.sub(r'targetSdk\s*=\s*.*', 'targetSdk = 36', content)
+              with open(b_path, 'w', encoding='utf-8') as f:
+                  f.write(content)
+              print(f"Successfully patched {b_path}")
 
       - name: Build APK
         working-directory: ./simple_live_app
