@@ -1,10 +1,10 @@
-name: Build Android 16 APK (Final Robust)
+name: Build Android 16 APK (Super Robust)
 
 on:
   workflow_dispatch:
 
 env:
-  # 经过验证，对于 Flutter 3.38，2.1.0 是目前最稳健的选择
+  # 统一使用 2.1.0，并配合下方的强制对齐策略
   K_VERSION: "2.1.0"
   SDK_VERSION: "36"
 
@@ -31,7 +31,7 @@ jobs:
           flutter-version: "3.38.x"
           cache: true
 
-      # 1. 自动签名逻辑（保持不变，确保您能正常安装和更新）
+      # 1. 签名自动处理（保持不变，确保无缝更新）
       - name: Setup Persistent Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -48,36 +48,36 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 2. 【核心稳健步骤】使用 Python 进行物理级版本替换，避开 sed 漏洞
-      - name: Force Update Versions (Python Script)
-        working-directory: ./simple_live_app/android
+      # 2. 【核心修复】直接调用原生 Python 解释器，彻底解决引号/语法错误
+      - name: Force Update Versions
+        shell: python
         run: |
-          python3 -c "
-          import re, os
-          # 修复 settings.gradle 中的插件版本
-          if os.path.exists('settings.gradle'):
-              c = open('settings.gradle').read()
-              c = re.sub(r'(id\s*[\"|\']org.jetbrains.kotlin.android[\"']\s*version\s*[\"|\'])([^\"|\']+)([\"|\'])', r'\g<1>${{ env.K_VERSION }}\g<3>', c)
-              open('settings.gradle', 'w').write(c)
+          import os, re
           
-          # 修复 app 目录下的 SDK 版本
-          bp = 'app/build.gradle.kts'
-          if not os.path.exists(bp): bp = 'app/build.gradle'
-          if os.path.exists(bp):
-              c = open(bp).read()
-              c = re.sub(r'compileSdk\s*=\s*\d+', 'compileSdk = ${{ env.SDK_VERSION }}', c)
-              c = re.sub(r'targetSdk\s*=\s*\d+', 'targetSdk = ${{ env.SDK_VERSION }}', c)
-              c = re.sub(r'compileSdkVersion\s*\d+', 'compileSdkVersion ${{ env.SDK_VERSION }}', c)
-              c = re.sub(r'targetSdkVersion\s*\d+', 'targetSdkVersion ${{ env.SDK_VERSION }}', c)
-              open(bp, 'w').write(c)
-          "
+          # 修复 settings.gradle (Kotlin 插件版本)
+          s_path = 'simple_live_app/android/settings.gradle'
+          if os.path.exists(s_path):
+              with open(s_path, 'r') as f: content = f.read()
+              content = re.sub(r'id\s*\(?["\']org\.jetbrains\.kotlin\.android["\']\)?\s*version\s*["\']([^"\']+)["\']', 
+                              'id "org.jetbrains.kotlin.android" version "${{ env.K_VERSION }}"', content)
+              with open(s_path, 'w') as f: f.write(content)
 
-      # 3. 【终极绝招】在全局 build.gradle 中注入策略，强制所有依赖库版本对齐
-      # 这能解决 metadata 2.3.0 vs 2.1.0 的冲突
+          # 修复 app 级 build.gradle (SDK 版本)
+          # 遍历可能的路径 (.kts 或普通 gradle)
+          for bp in ['simple_live_app/android/app/build.gradle.kts', 'simple_live_app/android/app/build.gradle']:
+              if os.path.exists(bp):
+                  with open(bp, 'r') as f: content = f.read()
+                  content = re.sub(r'compileSdk\s*=?\s*\d+', 'compileSdk = ${{ env.SDK_VERSION }}', content)
+                  content = re.sub(r'targetSdk\s*=?\s*\d+', 'targetSdk = ${{ env.SDK_VERSION }}', content)
+                  content = re.sub(r'compileSdkVersion\s*\d+', 'compileSdkVersion ${{ env.SDK_VERSION }}', content)
+                  content = re.sub(r'targetSdkVersion\s*\d+', 'targetSdkVersion ${{ env.SDK_VERSION }}', content)
+                  with open(bp, 'w') as f: f.write(content)
+                  print(f"Successfully updated {bp}")
+
+      # 3. 【终极对齐】注入全局解析策略，强制所有第三方库使用相同的 Kotlin 版本
       - name: Inject Global Resolution Strategy
-        working-directory: ./simple_live_app/android
         run: |
-          echo "
+          cat <<EOF >> simple_live_app/android/build.gradle
           allprojects {
               configurations.all {
                   resolutionStrategy.eachDependency { details ->
@@ -87,9 +87,9 @@ jobs:
                   }
               }
           }
-          " >> build.gradle
+          EOF
 
-      # 4. 清理并打包
+      # 4. 编译打包
       - name: Build APK
         working-directory: ./simple_live_app
         run: |
