@@ -26,7 +26,12 @@ jobs:
           flutter-version: '3.38.10'
           cache: true
 
-      # 签名设置（自动管理密钥，确保你可以覆盖安装）
+      # 显式安装 Android 16 SDK (API 36)，防止云端环境缺失
+      - name: Install Android 16 SDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # 签名设置（保持不变，确保安装包可以被系统接受）
       - name: Setup Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -35,7 +40,7 @@ jobs:
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add -f my_release.keystore
-            git commit -m "chore: add keystore for signing"
+            git commit -m "chore: add keystore"
             git push
           fi
           echo "storeFile=$(pwd)/my_release.keystore" > key.properties
@@ -43,19 +48,18 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 严格修复：使用 find 自动匹配文件后缀，解决路径找不到和版本不匹配的问题
-      - name: Patch Versions
+      # 精准修改版本号（不再使用模糊匹配，防止拼写错误）
+      - name: Patch Android Configuration
         working-directory: ./simple_live_app/android
         run: |
-          # 1. 自动查找 settings.gradle 或 .kts，并修复 Kotlin 为 2.3.0
-          find . -maxdepth 1 -name "settings.gradle*" -exec sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.3.0"/g' {} +
+          # 1. 修复 Kotlin 版本为 2.3.0（解决 metadata 2.3.0 报错）
+          # 使用 @ 作为定界符，防止路径或特殊符号干扰，直接匹配含有 kotlin.android 的行并重写
+          sed -i '/id("org.jetbrains.kotlin.android") version/c\    id("org.jetbrains.kotlin.android") version "2.3.0"' settings.gradle
           
-          # 2. 自动查找 build.gradle 或 .kts，并修复 SDK 版本为 36
-          find app -name "build.gradle*" -exec sed -i 's/compileSdk[ =]*[0-9]*/compileSdk = 36/g' {} +
-          find app -name "build.gradle*" -exec sed -i 's/targetSdk[ =]*[0-9]*/targetSdk = 36/g' {} +
-          # 兼容旧版 Groovy 语法
-          find app -name "build.gradle*" -exec sed -i 's/compileSdkVersion [0-9]*/compileSdkVersion 36/g' {} +
-          find app -name "build.gradle*" -exec sed -i 's/targetSdkVersion [0-9]*/targetSdkVersion 36/g' {} +
+          # 2. 修复 SDK 版本为 36 (针对 build.gradle.kts)
+          # c\ 命令会直接替换整行内容，绝对不会出现 36flutter 这种合并错误
+          sed -i '/compileSdk = .*/c\    compileSdk = 36' app/build.gradle.kts
+          sed -i '/targetSdk = .*/c\        targetSdk = 36' app/build.gradle.kts
 
       - name: Build APK
         working-directory: ./simple_live_app
