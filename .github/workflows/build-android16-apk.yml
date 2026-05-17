@@ -1,82 +1,87 @@
-name: Build Android 16 APK
+name: Build Android 16 APK (Robust Version)
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
+  push:
+    tags:
+      - "dev_v*"
 
-# 赋予 GitHub Actions 往仓库写入文件的权限（用于保存签名）
+# 【稳健配置区】以后再遇到版本报错，只需修改这里的数字即可全局生效！
+env:
+  KOTLIN_VERSION: "2.3.0"   # 看报错日志里的 "metadata is X.X.X"，填到这里
+  TARGET_SDK: "36"          # 适配 Android 16
+  FLUTTER_VERSION: "3.38.x" # 锁定 Flutter 大版本，防止系统级 API 突变
+
 permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-android:
+    runs-on: ubuntu-latest  # 使用 Linux 编译安卓，速度最快、不费额度
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          distribution: "zulu"
+          java-version: "17"
+          cache: "gradle"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
 
-      # 自动生成并永久保存签名文件到您的仓库
+      # 1. 自动生成并固化签名（解决您没有作者 Secret 的问题）
       - name: Setup Persistent Keystore
         working-directory: ./simple_live_app/android
         run: |
           if [ ! -f "my_release.keystore" ]; then
-            echo "未找到签名文件，正在生成并保存到仓库..."
+            echo "未找到签名，正在生成并保存..."
             keytool -genkey -v -keystore my_release.keystore -storepass 123456 -alias mykey -keypass 123456 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=SimpleLive,O=Android,C=US"
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add -f my_release.keystore
-            git commit -m "Auto-generate persistent keystore for seamless updates"
+            git commit -m "Auto-generate persistent keystore"
             git push
-          else
-            echo "检测到已存在的签名文件，直接使用以保证更新时的签名一致性！"
           fi
-          
-          echo "storePassword=123456" > key.properties
+          echo "storeFile=$(pwd)/my_release.keystore" > key.properties
+          echo "storePassword=123456" >> key.properties
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
-          echo "storeFile=$(pwd)/my_release.keystore" >> key.properties
 
-      # 【重要新增】强制升级 Kotlin 编译版本为 2.1.0，解决版本不匹配报错
-      - name: Update Kotlin Version
+      # 2. 【核心稳健操作】统一注入顶部配置的 Kotlin 版本与 SDK 版本
+      - name: Apply Kotlin & SDK Versions
         working-directory: ./simple_live_app
         run: |
-          # 针对新版 Flutter 结构 (settings.gradle)
-          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]+"/id "org.jetbrains.kotlin.android" version "2.1.0"/g' android/settings.gradle || true
-          sed -i -E "s/id 'org.jetbrains.kotlin.android' version '[^']+'/id 'org.jetbrains.kotlin.android' version '2.1.0'/g" android/settings.gradle || true
+          echo "注入 Kotlin 版本: ${{ env.KOTLIN_VERSION }}"
+          echo "注入 SDK 版本: ${{ env.TARGET_SDK }}"
           
-          # 针对旧版/KTS 结构 (build.gradle 或 build.gradle.kts)
-          sed -i -E "s/ext.kotlin_version = '[^']+'/ext.kotlin_version = '2.1.0'/g" android/build.gradle || true
-          sed -i -E 's/ext.kotlin_version = "[^"]+"/ext.kotlin_version = "2.1.0"/g' android/build.gradle || true
-          sed -i -E "s/ext.kotlin_version = '[^']+'/ext.kotlin_version = '2.1.0'/g" android/build.gradle.kts || true
-          sed -i -E 's/ext.kotlin_version = "[^"]+"/ext.kotlin_version = "2.1.0"/g' android/build.gradle.kts || true
+          # 替换 Kotlin 版本
+          sed -i -E "s/id [\"']org.jetbrains.kotlin.android[\"'] version [\"'][^\"]+[\"']/id 'org.jetbrains.kotlin.android' version '${{ env.KOTLIN_VERSION }}'/g" android/settings.gradle || true
+          sed -i -E "s/ext.kotlin_version = [\"'][^\"]+[\"']/ext.kotlin_version = '${{ env.KOTLIN_VERSION }}'/g" android/build.gradle || true
+          sed -i -E "s/ext.kotlin_version = [\"'][^\"]+[\"']/ext.kotlin_version = '${{ env.KOTLIN_VERSION }}'/g" android/build.gradle.kts || true
+          
+          # 替换 Android SDK 版本
+          sed -i "s/compileSdk = .*/compileSdk = ${{ env.TARGET_SDK }}/g" android/app/build.gradle.kts || true
+          sed -i "s/targetSdk = .*/targetSdk = ${{ env.TARGET_SDK }}/g" android/app/build.gradle.kts || true
+          sed -i "s/compileSdkVersion .*/compileSdkVersion ${{ env.TARGET_SDK }}/g" android/app/build.gradle || true
+          sed -i "s/targetSdkVersion .*/targetSdkVersion ${{ env.TARGET_SDK }}/g" android/app/build.gradle || true
 
-      # 修改 Android SDK 目标版本为 36 (Android 16)
-      - name: Set SDK Version to 36
-        working-directory: ./simple_live_app
-        run: |
-          sed -i 's/compileSdk = .*/compileSdk = 36/g' android/app/build.gradle.kts || true
-          sed -i 's/targetSdk = .*/targetSdk = 36/g' android/app/build.gradle.kts || true
-
-      - name: Install Dependencies
+      - name: Restore Packages
         working-directory: ./simple_live_app
         run: flutter pub get
 
-      - name: Build APK (Release & Arm64)
+      # 3. 为您的新手机单独打包 64 位纯净版本
+      - name: Build APK (Android 16 Arm64)
         working-directory: ./simple_live_app
         run: flutter build apk --release --target-platform android-arm64
 
-      - name: Upload APK Artifact
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: SimpleLive-Android16-Arm64
