@@ -1,4 +1,4 @@
-name: Build Android 16 APK (2026 Stable)
+name: Build Android 16 (Final Fix 2026)
 
 on:
   workflow_dispatch:
@@ -18,14 +18,13 @@ jobs:
         with:
           distribution: "zulu"
           java-version: "17"
-          cache: "gradle"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.38.x"
 
-      # 签名固化（自动管理你的密钥）
+      # 签名逻辑：生成一次后会自动存在你仓库里，以后更新签名就一致了
       - name: Setup Keystore
         working-directory: ./simple_live_app/android
         run: |
@@ -34,7 +33,7 @@ jobs:
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add -f my_release.keystore
-            git commit -m "chore: persist keystore for android 16"
+            git commit -m "chore: persist keystore"
             git push
           fi
           echo "storeFile=$(pwd)/my_release.keystore" > key.properties
@@ -42,59 +41,48 @@ jobs:
           echo "keyPassword=123456" >> key.properties
           echo "keyAlias=mykey" >> key.properties
 
-      # 使用 Python 彻底解决版本冲突，避开 Bash 引号地狱
-      - name: Patch Project Versions
-        shell: python
+      # 【核心改动】创建一个全局 init.gradle 脚本，从外部强行锁定版本
+      - name: Create Global Init Script
         run: |
-          import os, re
-          
-          # 1. 强制修改 settings.gradle 中的 Kotlin 插件版本为 2.3.0
-          s_path = 'simple_live_app/android/settings.gradle'
-          if os.path.exists(s_path):
-              with open(s_path, 'r') as f: content = f.read()
-              # 匹配各种写法，统一改为 2.3.0
-              content = re.sub(r'id\s*\(?["\']org\.jetbrains\.kotlin\.android["\']\)?\s*version\s*["\'][^"\']+["\']', 
-                              'id "org.jetbrains.kotlin.android" version "2.3.0"', content)
-              with open(s_path, 'w') as f: f.write(content)
-              print("Settings.gradle updated.")
-
-          # 2. 注入全局 Resolution Strategy 到 build.gradle
-          # 强制所有第三方库必须使用 2.3.0 的 Kotlin 核心库
-          b_path = 'simple_live_app/android/build.gradle'
-          strategy = """
+          cat <<EOF > fix_build.gradle
           allprojects {
-              configurations.all {
-                  resolutionStrategy.eachDependency { details ->
-                      if (details.requested.group == 'org.jetbrains.kotlin') {
-                          details.useVersion '2.3.0'
+              buildscript {
+                  configurations.all {
+                      resolutionStrategy.force "org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0"
+                  }
+              }
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 36
+                          defaultConfig {
+                              targetSdkVersion 36
+                          }
+                      }
+                  }
+                  project.configurations.all {
+                      resolutionStrategy.eachDependency { details ->
+                          if (details.requested.group == 'org.jetbrains.kotlin') {
+                              details.useVersion '2.3.0'
+                          }
                       }
                   }
               }
           }
-          """
-          if os.path.exists(b_path):
-              with open(b_path, 'a') as f: f.write(strategy)
-              print("Global strategy injected.")
-
-          # 3. 强制提升 SDK 版本到 36 (Android 16)
-          for bp in ['simple_live_app/android/app/build.gradle.kts', 'simple_live_app/android/app/build.gradle']:
-              if os.path.exists(bp):
-                  with open(bp, 'r') as f: content = f.read()
-                  content = re.sub(r'compileSdk\s*=?\s*\d+', 'compileSdk = 36', content)
-                  content = re.sub(r'targetSdk\s*=?\s*\d+', 'targetSdk = 36', content)
-                  content = re.sub(r'compileSdkVersion\s*\d+', 'compileSdkVersion 36', content)
-                  content = re.sub(r'targetSdkVersion\s*\d+', 'targetSdkVersion 36', content)
-                  with open(bp, 'w') as f: f.write(content)
-                  print(f"SDK version updated in {bp}")
+          EOF
 
       - name: Build APK
         working-directory: ./simple_live_app
         run: |
           flutter pub get
-          flutter build apk --release --target-platform android-arm64
+          # 使用 --init-script 挂载我们写的“外挂”脚本
+          flutter build apk --release --target-platform android-arm64 --performance-measurement \
+            --extra-front-end-options="--no-implicit-dynamic" \
+            -- --init-script ../fix_build.gradle
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: SimpleLive-Android16-Final
+          # 使用通配符，防止文件名因为 Flutter 版本不同而发生变化
           path: simple_live_app/build/app/outputs/flutter-apk/*.apk
